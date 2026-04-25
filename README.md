@@ -1,6 +1,7 @@
-# SillyTavern 世界书管家 — World Book Manager
+# SillyTavern 世界书管家 — World Book Maker
 
 一句话让 AI 读轻小说/设定集，自动生成结构化世界书 JSON。
+
 **注意：本项目基本由AI生成，可能会出现意料之外的问题。作者并不很懂编程，但欢迎提出issue。**
 
 ## 这是什么
