@@ -1,4 +1,4 @@
-# SillyTavern 世界书管家 — World Book Maker
+# SillyTavern 世界书制作机 — World Book Maker
 
 一句话让 AI 读轻小说/设定集，自动生成结构化世界书 JSON。
 
