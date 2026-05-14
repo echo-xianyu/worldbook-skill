@@ -79,16 +79,34 @@ def read_content(value):
 
 
 def parse_key_list(value):
-    """解析逗号分隔的 key 列表"""
+    """解析 key 列表。兼容两种输入：
+    - 字符串: "关键词1,关键词2" → split by comma
+    - 列表: ["关键词1", "关键词2"] → use as-is
+    """
     if not value:
         return []
+    if isinstance(value, list):
+        return [k.strip() for k in value if k and isinstance(k, str)]
     return [k.strip() for k in value.split(",") if k.strip()]
 
 
+
+def _camel_to_snake(name):
+    """camelCase → snake_case。如 preventRecursion → prevent_recursion"""
+    s1 = re.sub(r'(.)([A-Z][a-z]+)', r'\1_\2', name)
+    return re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+
 class _Args:
-    """把 dict 伪装成 argparse.Namespace，让 build_entry 同时兼容 CLI 和 batch"""
+    """把 dict 伪装成 argparse.Namespace，让 build_entry 同时兼容 CLI 和 batch。
+    自动生成 camelCase 和 snake_case 两套属性名，batch JSON 两种写法都支持。
+    """
     def __init__(self, d):
-        self.__dict__.update(d)
+        for k, v in d.items():
+            setattr(self, k, v)
+            snake = _camel_to_snake(k)
+            if snake != k:
+                setattr(self, snake, v)
     def __getattr__(self, name):
         return None
 

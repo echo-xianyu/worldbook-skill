@@ -207,6 +207,7 @@ python scripts/query.py <世界书路径> --brief
 - **preventRecursion=false** → 修正：加 `--prevent-recursion` 后重新编辑该条目
 - **excludeRecursion=false** → 修正：加 `--exclude-recursion` 后重新编辑该条目
 - 禁词条目缺失 → 补充创建 3 个禁词条目
+- **使用 `--batch` 后建议用 `query.py --brief` 验证** → 确认所有条目的双递归配置正确。batch JSON 支持 camelCase 和 snake_case 两种字段名。
 
 ---
 
@@ -271,6 +272,8 @@ python scripts/world-book-create.py <世界书路径> --batch entries.json
 python scripts/world-book-create.py <世界书路径> --batch-edit edits.json
 ```
 `edits.json` 是一个 JSON 数组，每个对象必须含 `uid` 字段。**与 query.py --uid 输出格式完全兼容。**
+
+> **批量 JSON 字段名规则：** 支持 **camelCase**（SillyTavern JSON 原生格式 `preventRecursion`）和 **snake_case**（CLI 风格 `prevent_recursion`）两种写法。脚本底层自动转换。`keys` 字段接受字符串（`"关键词1,关键词2"`）或 JSON 数组（`["关键词1", "关键词2"]`）两种格式。
 
 #### 列出所有条目（终端可读格式）
 ```bash
