@@ -151,7 +151,8 @@ AI 生成配置JSON → 用户确认 → card-generator.py 生成角色卡JSON �
 | output_format | string | 输出格式（可选） |
 | variable_list_path | string | 变量路径（默认 stat_data） |
 | hide_regex | boolean | 自动添加变量更新隐藏正则 |
-| beautify_regex | boolean | 自动添加变量更新美化正则 |
+| beautify_regex | boolean | false | 自动添加变量更新美化正则 |
+| inline_cdn | boolean | false | 使用内联模式（不依赖CDN加载 bundle.js） |
 
 **启用 mvu 后自动生成：**
 1. MVU 核心脚本（bundle.js）
@@ -308,3 +309,27 @@ python card-generator.py --validate card.json
 # 生成测试角色卡
 python card-generator.py --config 测试角色卡_config.json -o 输出.json
 ```
+
+---
+
+## 自动校验与安全特性（本地修补）
+
+本地的 card-generator.py 比上游版本多了以下校验，生成时自动执行：
+
+### 配置输入校验
+- 缺 `card.name` 或同时缺 `first_mes`/`description` → 报错中断
+- MVU 启用但缺 `schema_script`/`initvar`/`update_rules` → 打印警告（不中断）
+- MVU 启用但开场缺 `<StatusPlaceHolderImpl/>` → 打印警告
+- `statusbar.enabled=true` 但无 `html` → 报错中断
+
+### MVU 风格冲突检测
+检测 `schema_script` 是否混用了 `registerMvuSchema`（zod风格）和 `_.add()`/`_.set()`/`getvar()`（beta风格）。两种风格不兼容，混用时报错中断。
+
+### 正则自动排序与校验
+生成后在后台执行 `_sort_and_validate_regex`：
+1. **排序**：状态栏美化正则 → 全局美化正则（`<chat>`包裹）→ 其他正则
+2. **/s flag 自动补全**：全局美化正则缺 dotAll flag 时自动加上
+3. **`white-space: pre-wrap` 检测**：全局美化 HTML 模板中内层内容区缺少此属性时报警
+
+### 内联 CDN 模式
+设 `mvu.inline_cdn: true` 则 MVU 核心脚本以骨架备注形式嵌入（不加载 CDN 的 bundle.js）。适合网络受限环境，需手动填入实际 JS 内容。默认 `false`（从 CDN 加载）。

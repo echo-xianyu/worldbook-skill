@@ -79,16 +79,23 @@ def read_content(value):
 
 
 def parse_key_list(value):
-    """解析逗号分隔的 key 列表"""
+    """解析逗号分隔或数组格式的 key 列表"""
     if not value:
         return []
+    if isinstance(value, list):
+        return [str(k).strip() for k in value if k and str(k).strip()]
     return [k.strip() for k in value.split(",") if k.strip()]
 
 
 class _Args:
     """把 dict 伪装成 argparse.Namespace，让 build_entry 同时兼容 CLI 和 batch"""
+    _camel_to_snake = staticmethod(lambda s: ''.join(['_' + c.lower() if c.isupper() else c for c in s]).lstrip('_'))
+
     def __init__(self, d):
-        self.__dict__.update(d)
+        normalized = {}
+        for k, v in d.items():
+            normalized[self._camel_to_snake(k)] = v
+        self.__dict__.update(normalized)
     def __getattr__(self, name):
         return None
 

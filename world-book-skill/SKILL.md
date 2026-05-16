@@ -143,6 +143,9 @@ references/extract-item.md               — 物品/能力提取（如需）
 - [ ] 世界书条目 XML包裹YAML 格式
 - [ ] 未主动建议MVU/HTML（除非用户要求）
 
+**沉浸感增强（可选，当用户表示 Tavo 回复干巴巴时推荐）：**
+如果用户长期在 Tavo 上使用且觉得八股，在 `system_prompt` 和 `post_history_instructions` 加入 CoT 思维链指令。详见 `references/card-writing-guide.md` 八。
+
 ### A.6 组装配置JSON + 生成角色卡
 
 用户确认后，按 `card-generator-guide.md` 组装配置JSON，然后：
@@ -223,6 +226,97 @@ python scripts/card-generator.py --validate 角色名.json
 - `references/world-book-guide.md` — world-book-create.py / query.py
 - `references/config-guide.md` — 配置组合速查
 
+## 角色卡升级（CoT 思维链）
+
+如果角色在 Tavo/SillyTavern 上跑起来八股干涩、不像风月那样沉浸，大概率不是角色卡数据不够——而是 AI 被格式指令消耗了注意力，没空间做叙事思考。
+
+解决：在 `system_prompt` 和 `post_history_instructions` 末尾追加 CoT 思维链指令。
+
+详见 `references/cot-card-upgrade.md`。
+
+## ⚠️ 上游状态
+
+本技能从 `echo-xianyu/worldbook-skill`（GitHub）导入后，做了大量本地修补：
+- `_Args` camelCase→snake_case 自动转换
+- `parse_key_list` 数组兼容
+- 正则正序（状态栏先→全局后）+ /s flag + white-space 校验
+- 输入校验 + MVU 冲突检测 + inline_cdn
+- SKILL.md 防翻车指南（D0 + 兜底正则）
+- `/s` auto-fix 格式 bug 修复 + CSS whitespace 校验修正
+
+**上游所有补丁均未合入。** 重新拉取上游会丢失所有本地改进。如需同步上游新功能，手动对比合并。
+
+---
+
+## 🎭 对话体验优化（对抗管线导致的八股感）
+
+### 现象
+
+同一张角色卡 + 世界书，在 风月 上沉浸感强（像看小说），在 Tavo/SillyTavern 上干涩八股。**模型相同，管线不同。**
+
+### 根因
+
+SillyTavern 标准管线全量注入：
+```
+MVU 变量系统 + <UpdateVariable> JSON Patch 模板 + 状态栏 HTML + 全局美化<chat>
++ 世界书全量条目 + 正则指令
+= 30-50% 的 token 被结构性指令占用，模型注意力从叙事转向格式维护
+```
+
+风月的管线精简：仅注入世界书原文 + 前端自己算变量 + 不要求模型输出格式标签。
+
+### 解法：思维链（CoT）注入
+
+在角色卡 JSON 的两个关键字段加入 CoT 指令，模仿风月 MOD 的思考引导效果：
+
+#### 1. `system_prompt` 尾部（全面版）
+
+```yaml
+data:
+  system_prompt: |
+    （原有角色描述、性格、规则……）
+
+    【回复前思维链（不输出，仅用于构筑回复）】
+    每次回复前，按以下步骤在脑中过一遍，不在回复中留下思考痕迹：
+    1. 推演场：当前场景的情绪基调是什么？角色在这个情境下最真实的感受是什么（包括他自己可能都没意识到的）？
+    2. 锚定细节：从环境/动作中选出1-2个能承载情绪的物理细节
+    3. 克制呈现：用动作、沉默、环境、对白的间隙来传达情绪，不在叙事中解释角色心理
+    4. 自检：输出前确认——没有叙事禁词、没有意象比喻、没有解释性修饰
+```
+
+#### 2. `post_history_instructions`（简洁版，紧贴对话历史权重更高）
+
+```yaml
+data:
+  post_history_instructions: |
+    （原有角色简述……）
+
+    【思维链·先想后写】
+    1. 推演场——当前场景的情绪基调？角色此刻的真实感受？
+    2. 锚细节——选1-2个物理细节（光/声/触感/寂静长短）承载情绪
+    3. 克制写——动作+沉默+环境+对白间隙，不在叙事中解释心理
+    4. 自检——无禁词/无解释性修饰/不总结
+```
+
+#### 3. 辅助减负（可选，效果显著）
+
+- MVU 已启用 → 关掉跑一回合对比
+- 状态栏已启用 → 移到 depth≥4 或暂时关闭
+- 世界书条目 > 10 条 → 压缩到核心 5-7 条
+
+### 验证方法
+
+修改后重启会话（开新对话而不是继续旧对话效果更好），观察：
+- 回复是否更少"规则执行感"
+- 角色是否更一致（而不是格式先于内容）
+- 环境描写是否自然融入而非生硬插入
+
+### 注意
+
+- chara_card_v2 和 v3 中 `system_prompt` 和 `post_history_instructions` 在 JSON 的顶层和 `data.*` 层各有一份，**必须更新两处**才能确保被加载
+- 修改版本号（`character_version`）标记改动
+- 如果同时使用人类协同过滤技能（bookkeeper-core + humanizer），CoT 的自检步骤可以更激进
+
 ---
 
 ## 内容格式规范
@@ -239,6 +333,145 @@ key2:
 ```
 
 **禁止纯XML**（`<tag>key: value</tag>`）。
+
+---
+
+## 🚨 全局美化的防翻车指南（模式C）
+
+使用全局美化（`<chat>` 包裹正文 + 状态栏）时，以下是最常见的失效原因和补救措施：
+
+### 1. D0 条目（必须创建，且措辞必须强硬）
+
+创建 @D depth=0 的格式保持条目，告诉 AI **每次回复都必须**用 `<chat>` 包裹：
+
+```yaml
+---
+格式规则（强制执行）:
+  包裹标签: >
+    每次回复必须用 <chat>...</chat> 包裹全部正文内容。
+    若未使用 <chat> 包裹，对话格式将无法正常渲染。
+    状态栏 <statusbar>...</statusbar> 必须放在 </chat> 之前（正文末尾）。
+    不得遗漏 <chat> 开闭标签。
+  状态栏格式:
+    <statusbar>
+    <emotion-list>
+    [平静25%][烦躁5%][开心50%][喜悦10%]
+    </emotion-list>
+    好感度: XX
+    </statusbar>
+```
+
+- **条目配置**：position=4 (D0), depth=0, role=0 (system), constant=true
+- **命名建议**：`[D0]格式规范（强制）`
+
+### 2. 兜底正则（AI 忘记包 `<chat>` 时的最后防线）
+
+创建第二个正则，匹配 **没有 `<chat>` 包裹**的纯消息体，自动补上框架：
+
+```json
+{
+  "scriptName": "[兜底]无chat标签时补框架",
+  "findRegex": "^(?!<chat>)([\\s\\S]*)<statusbar>",
+  "replaceString": "<chat>\\n$1\\n</chat>",
+  "markdownOnly": true,
+  "placement": [1, 2],
+  "runOnEdit": true
+}
+```
+
+这个正则检测：消息开头不是 `<chat>` 但含有 `<statusbar>` → 自动用 `<chat>` 包裹。
+**注意：** 兜底正则必须放在全局美化正则**之后**执行（`_sort_and_validate_regex` 会自动排序）。
+
+### 3. 开场白必须包 `<chat>`
+
+所有 `first_mes` 和 `alternate_greetings` 必须以 `<chat>` 开头、`</chat>` 结尾。否则全局美化正则在开场就失效。
+
+---
+
+## 🎯 叙事优化：沉浸感调优指南
+
+SillyTavern 的完整管线（全量世界书注入 + 正则脚本 + MVU 变量系统 + 状态栏）在提供丰富功能的同时，**可能被模型吸收为格式指令，分散叙事注意力**，导致输出干巴巴、八股感强。以下调优方案专门解决这个问题。
+
+### 核心发现
+
+| | 全量管线（SillyTavern 标准） | 精简管线（风月风格） |
+|---|---|---|
+| 模型视角 | 数据表 + 待执行指令列表 | 写作任务 |
+| 注意力分配 | 一半花在格式/变量/标签上 | 全花在叙事本身 |
+| 输出 | 八股、干、格式正确但无灵魂 | 像小说、沉浸、自然 |
+| token 效率 | 30-50% token 消耗在格式维护 | 全部 token 用于创作 |
+
+**什么时候该用这个指南：**
+- 用户反映 AI 回复"八股"、"干巴巴"、"像在写报告"
+- 角色卡沉浸感强但实际跑起来不如预期
+- 同一份角色卡在风月等平台上"更自然"
+- 世界书条目超过 10 条且全量注入（constant=true）
+
+### 方案 A：添加 CoT 指令链（最推荐，零管线改动）
+
+在角色卡的 `system_prompt` / `post_history_instructions` / `depth_prompt` 字段中加入思维链指令，模拟风月平台 MOD 的 CoT + 自检效果：
+
+**system_prompt（注入位置：系统提示，稳定但稍早）**
+```yaml
+data:
+  system_prompt: |
+    每次回复前先执行以下步骤：
+    1. 推演：当前场景的情绪调性是什么？角色此刻的内心活动是什么？
+    2. 选材：从世界书中选取此时最相关的 1-2 条设定
+    3. 写草稿：用白描+动作+对白呈现，不用比喻/禁词
+    4. 自检：输出前检查——有禁词就删，有人设跑偏就改
+```
+
+**post_history_instructions（注入位置：紧贴对话历史，权重最高）**
+```yaml
+data:
+  post_history_instructions: |
+    [写作指令]
+    请先思考再写。思考过程不输出给用户。
+    克制描写。只用动作、对白、环境烘托情绪。
+    不自证、不解释、不总结。
+    不对自己的叙事做任何评述。
+```
+
+**depth_prompt（定期重新注入，防止长对话中指令被稀释）**
+```yaml
+data:
+  extensions:
+    depth_prompt:
+      prompt: |
+        每次回复前先想三件事：
+        - 这场合角色最真实的情绪是什么？
+        - 他在压抑什么？
+        - 这个压抑如何通过最小的动作/沉默展现？
+        想完再写。输出只写叙事本身。
+      depth: 4
+      role: system
+```
+
+详细模板和更多配置示例见 `references/narrative-optimization.md`。
+
+### 方案 B：精简管线（从全量逐步剥离）
+
+当已有角色卡的 MVU/状态栏/全量世界书拖累了叙事质量时：
+
+1. **第一步 - 关 MVU**：`mvu.enabled: false`，看回复是否变灵活
+2. **第二步 - 关状态栏**：`statusbar.enabled: false`，看 AI 是否不再分心处理格式标签
+3. **第三步 - 压缩世界书**：全量 constant=true 的条目改成选择性触发（selective=true），或减少条目数到 5-7 条核心
+4. **第四步 - 只跑裸卡**：仅保留 `description` + `first_mes` + 3 条核心世界书，零正则零脚本
+
+每步跑几轮，找到叙事质量拐点。
+
+### 方案 C：取舍判断（什么时候用什么模式）
+
+```
+管线全部开启 → 需要完整 MVU 游戏系统（好感度/属性/变量跟踪时）
+     ↓
+关 MVU + 状态栏 + 正则 → 纯叙事沉浸（写实派/文学向角色时）
+     ↓
+加 CoT 指令链 → 精简后叙事质量还不够（模拟风月 MOD 的思维引导）
+```
+
+三个方案可以叠加。最优配置往往是：**精简管线 + CoT 指令链**。
 
 ---
 
@@ -263,4 +496,5 @@ key2:
 - `references/extract-character.md` — 角色提取
 - `references/extract-item.md` — 物品/能力提取
 - `references/extract-style.md` — 文风提取
+- `references/narrative-optimization.md` — 叙事优化：CoT 指令链模板与配置示例
 - `references/story.md` — 故事/章节提取

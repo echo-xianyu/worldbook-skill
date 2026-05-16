@@ -82,6 +82,14 @@ DEFAULT_MVU_BUNDLE = (
     "import 'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate/artifact/bundle.js';"
 )
 
+# 内联模式：将CDN内容复制到本地嵌入。用户需自行下载 bundle.js 放到脚本同目录。
+# 设 mvu.inline_cdn=true 时使用本地加载。
+INLINE_MVU_BUNDLE = (
+    "// 内联模式：请将 MagVarUpdate bundle.js 下载到此脚本同目录后取消注释以下行\n"
+    "// import './bundle.js';\n"
+    "// 或替换为内联 JS 内容\n"
+)
+
 DEFAULT_MVU_BUTTONS = [
     {"name": "重新处理变量", "visible": True},
     {"name": "重新读取初始变量", "visible": True},
@@ -441,11 +449,16 @@ class CardBuilder:
         th[0][1].append(script)
         return self
 
-    def add_mvu_core_script(self):
-        """添加MVU核心脚本"""
+    def add_mvu_core_script(self, inline=False):
+        """添加MVU核心脚本
+
+        Args:
+            inline: True 时使用内联模式（不依赖CDN）
+        """
+        content = INLINE_MVU_BUNDLE if inline else DEFAULT_MVU_BUNDLE
         return self.add_tavern_script(
-            name="MVU",
-            content=DEFAULT_MVU_BUNDLE,
+            name="MVU" if not inline else "MVU(内联)",
+            content=content,
             buttons=DEFAULT_MVU_BUTTONS,
         )
 
@@ -497,6 +510,50 @@ class CardConfig:
         c = self.cfg
         if not isinstance(c, dict):
             raise ValueError("配置必须是一个JSON对象")
+
+        # === 输入校验 ===
+        card = c.get("card", {}) or {}
+        if not card.get("name"):
+            raise ValueError("缺少必填字段: card.name")
+        if not card.get("first_mes") and not card.get("description"):
+            raise ValueError("至少需要提供 card.first_mes（默认开场）或 card.description")
+
+        # MVU 风格冲突检测
+        mvu = c.get("mvu", {})
+        if mvu.get("enabled"):
+            schema = mvu.get("schema_script", "")
+            has_zod_style = "registerMvuSchema" in schema
+            has_beta_style = any(kw in schema for kw in ["_.add(", "_.set(", "getvar("])
+            if has_zod_style and has_beta_style:
+                raise ValueError(
+                    "MVU 风格冲突：schema_script 同时包含 MVU zod（registerMvuSchema）"
+                    "和 MVU beta（_.add/_.set/getvar）的代码。"
+                    "两种风格不兼容，请统一为一种。"
+                )
+
+        # 配置校验警告
+        warnings = []
+        if mvu.get("enabled"):
+            if not mvu.get("schema_script"):
+                warnings.append("  ⚠ MVU 已启用但未提供 schema_script——变量结构将不完整")
+            if not mvu.get("initvar"):
+                warnings.append("  ⚠ MVU 已启用但未提供 initvar——变量初始值将为空")
+            if not mvu.get("update_rules"):
+                warnings.append("  ⚠ MVU 已启用但未提供 update_rules——AI 不知道如何更新变量")
+        statusbar = c.get("statusbar", {})
+        if statusbar.get("enabled") and not statusbar.get("html"):
+            raise ValueError("statusbar.enabled=true 但未提供 statusbar.html")
+
+        # 开场占位符检查
+        first_mes = card.get("first_mes", "")
+        if mvu.get("enabled") and first_mes and "<StatusPlaceHolderImpl/>" not in first_mes:
+            warnings.append("  ⚠ MVU 已启用但默认开场缺少 <StatusPlaceHolderImpl/>——状态栏占位符不会渲染")
+        for i, g in enumerate(card.get("alternate_greetings", [])):
+            if mvu.get("enabled") and g and "<StatusPlaceHolderImpl/>" not in g:
+                warnings.append(f"  ⚠ 开场 {i+2} 缺少 <StatusPlaceHolderImpl/>——状态栏占位符不会渲染")
+
+        if warnings:
+            print("\n[配置校验]" + "\n".join(warnings) + "\n")
 
         # === 基本信息 ===
         card = c.get("card", {})
@@ -573,7 +630,8 @@ class CardConfig:
         if mvu.get("enabled"):
             if mvu.get("schema_script"):
                 builder.add_mvu_schema_script(mvu["schema_script"])
-            builder.add_mvu_core_script()
+            inline_cdn = mvu.get("inline_cdn", False)
+            builder.add_mvu_core_script(inline=inline_cdn)
             if mvu.get("initvar"):
                 builder.add_initvar_entry(mvu["initvar"])
             if mvu.get("variable_list_path") is not False:
@@ -601,7 +659,75 @@ class CardConfig:
             if statusbar.get("hide_regex", True):
                 builder.add_statusbar_hide_regex()
 
+        # === 正则后处理：排序 + 校验 ===
+        self._sort_and_validate_regex(builder)
         return builder
+
+    def _sort_and_validate_regex(self, builder):
+        """正则排序（状态栏先→全局后）+ 校验 /s flag + white-space"""
+        regex_list = builder.card["data"]["extensions"].get("regex_scripts", [])
+        if not regex_list:
+            return
+
+        # 1) 检测全局美化正则（匹配 <chat> 包裹的）
+        global_indices = []
+        statusbar_indices = []
+        other_indices = []
+        warns = []
+
+        for i, rs in enumerate(regex_list):
+            fr = rs.get("findRegex", "")
+            # 全局美化：匹配 <chat>...</chat>
+            if "<chat>" in fr and "<\\/chat>" in fr:
+                global_indices.append(i)
+                # 校验 /s flag
+                if not fr.endswith("s"):
+                    flags = fr.rsplit("/", 1)[-1] if fr.count("/") >= 2 else ""
+                    if "s" not in flags and "S" not in flags:
+                        warns.append(f"  ⚠ 正则「{rs.get('scriptName','')}」缺 /s flag（dotAll），换行符不匹配。已自动补上。")
+                        parts = fr.rsplit("/", 1)
+                        if len(parts) == 2:
+                            rs["findRegex"] = parts[0] + "/" + parts[1] + "s"
+            elif "StatusPlaceHolderImpl" in fr or "statusbar" in fr.lower():
+                statusbar_indices.append(i)
+            else:
+                other_indices.append(i)
+
+        # 2) 排序重组：状态栏 → 全局 → 其他
+        sorted_list = (
+            [regex_list[i] for i in statusbar_indices] +
+            [regex_list[i] for i in global_indices] +
+            [regex_list[i] for i in other_indices]
+        )
+        builder.card["data"]["extensions"]["regex_scripts"] = sorted_list
+
+        if statusbar_indices and global_indices:
+            # 验证排序是否真的把状态栏放前面了
+            first_global_idx_in_sorted = None
+            for i, rs in enumerate(sorted_list):
+                if "<chat>" in rs.get("findRegex", "") and "<\\/chat>" in rs.get("findRegex", ""):
+                    first_global_idx_in_sorted = i
+                    break
+            last_statusbar_idx_in_sorted = None
+            for i in range(len(sorted_list) - 1, -1, -1):
+                if "StatusPlaceHolderImpl" in sorted_list[i].get("findRegex", "") or "statusbar" in sorted_list[i].get("findRegex", "").lower():
+                    last_statusbar_idx_in_sorted = i
+                    break
+            if first_global_idx_in_sorted is not None and last_statusbar_idx_in_sorted is not None:
+                if first_global_idx_in_sorted < last_statusbar_idx_in_sorted:
+                    warns.append("  ⚠ 状态栏正则和全局美化正则在同一条目内，排序无法保障。请检查正则配置。")
+
+        # 3) 校验全局美化 HTML 模板是否含 white-space: pre-wrap
+        for rs in sorted_list:
+            replace = rs.get("replaceString", "")
+            if "<chat>" in rs.get("findRegex", "") and "<\\/chat>" in rs.get("findRegex", "") and replace:
+                if "white-space" not in replace:
+                    # 如果 replaceString 中有 $1，检查外层 div 是否缺少 white-space
+                    if "$1" in replace:
+                        warns.append(f"  ⚠ 全局美化正则「{rs.get('scriptName','')}」的HTML模板缺少 white-space: pre-wrap——AI输出的换行会被浏览器塌缩。请在内层内容区 div 加上 style='white-space: pre-wrap'。")
+
+        if warns:
+            print("\n[正则校验]" + "\n".join(warns) + "\n")
 
 
 # ============================================================
